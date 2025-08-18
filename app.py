@@ -58,7 +58,7 @@ TASK:
 
 3. **Extract** all `sourceName` values linked to `dataSourceName` fields from the JSON (no duplicates).
 
-4. **Don't use any of "\\n" or "\\\\n" — give raw multiline Output** and **Don't use** command lines and steps instructions until if the step is unclear or misssing data 
+4. **Stictly Don't use ** any of **"\\n" or "\\\\n" — give raw multiline Output** and **Don't use** command lines and steps instructions until if the step is unclear or misssing data 
 
 5. **Output strictly in JSON** (no extra text), in this format:
 
@@ -127,10 +127,25 @@ def generate_sql():
                     "error": "DOMO API output is missing required fields",
                     "raw_output": response_content
                 }), 500
+            
+            statements = [s.strip() for s in sql.split(";") if s.strip()]
+            combined_use = []
+            other_statements = []
+            for stmt in statements:
+                if stmt.upper().startswith("USE "):
+                    combined_use.append(stmt + ";")
+                else:
+                    other_statements.append(stmt + ";")
+
+            indexed_sql = {}
+            if combined_use:
+                indexed_sql["0"] = " ".join(combined_use)
+            for i, stmt in enumerate(other_statements, start=1):
+                indexed_sql[str(i)] = stmt
 
             return jsonify({
-                "Output": sql,
-                "inputs":inputs,
+                "Output": indexed_sql,
+                # "inputs":inputs,
             })
 
         except json.JSONDecodeError as e:
