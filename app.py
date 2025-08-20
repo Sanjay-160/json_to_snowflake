@@ -15,57 +15,56 @@ API_URL = os.getenv("API_URL")
 
 system_instruction = {
     "role": "system",
-    "content": """You are a Snowflake SQL expert and DOMO Magic ETL expert.
+    "content": """You are a Snowflake SQL expert and DOMO Magic ETL translator.
 
 TASK:
-
 1. **Analyze** the provided DOMO Magic ETL JSON:
-   - It contains a data transformation pipeline and schema details of all involved tables.
+   - Input schemas, transformation steps, execution order, and output table definition.
 
-2. **Generate** a complete Snowflake stored procedure named `SP_INSERT_COMPLETE_SALES_FINAL`:
-   - Replicate the transformations exactly as per the JSON.
-   - Insert the final result into the table `COMPLETE_SALES_FINAL`.
-   - Use this exact template:
+2. **Generate** a complete Snowflake stored procedure:
+   - Procedure name = "SP_<output_table_name>" (prefix "SP_" + output table).
+   - Insert final results into the output table defined in JSON.
+   - Use only Snowflake SQL syntax.
 
-     USE DATABASE INFORMATION;
-     USE SCHEMA PUBLIC;
-     USE WAREHOUSE COMPUTE_WH;
-
-     CREATE OR REPLACE PROCEDURE SP_INSERT_COMPLETE_SALES_FINAL()
+3. **SQL Template Rules**:
+   - Always begin with:
+       USE DATABASE <database_from_json>;
+       USE SCHEMA <schema_from_json>;
+       USE WAREHOUSE <warehouse_from_json>;
+   - CREATE OR REPLACE PROCEDURE <procedure_name>()
      RETURNS STRING
      LANGUAGE SQL
      AS
      $$
      BEGIN
-         CREATE OR REPLACE TEMP TABLE ... AS
-         SELECT ... FROM ...;
-
-
-         CREATE OR REPLACE TEMP TABLE ... AS
-         SELECT ... FROM ...;
-
-
-         INSERT INTO COMPLETE_SALES_FINAL (...) SELECT ... FROM ...;
-
+         <Each ETL step is a TEMP TABLE , following JSON execution order>
+         
+         INSERT INTO <output_table_name> (<columns from JSON>)
+         SELECT <columns from last step>
+         FROM <last_temp_table>;
+         
          RETURN 'Success';
      END;
      $$;
 
-   - Only use Snowflake-compatible SQL syntax.
-   - Add comments describing each step’s transformation.
-   - Use only fields present in the JSON — do NOT invent columns or tables.
-   - **Don't use -- command lines** until if the step is unclear or misssing data 
+4. **Transformation Rules**:
+   - Map DOMO “Replace Text” → REPLACE/REGEXP_REPLACE in SQL.
+   - “Add Formula / ExpressionEvaluator” → computed columns (CASE, DATE, YEAR, TRIM, etc.).
+   - “Rank & Window” → ROW_NUMBER() OVER (...) with QUALIFY or filter.
+   - “Filter Rows” → WHERE conditions.
+   - “Join Data / MergeJoin” → JOIN using JSON keys.
+   - “Select Columns” → final projection, matching output table schema.
+   - Remove columns only if marked `"remove": true` in JSON.
 
-3. **Extract** all `sourceName` values linked to `dataSourceName` fields from the JSON (no duplicates).
-
-4. **Stictly Don't use ** any of **"\\n" or "\\\\n" — give raw multiline Output** and **Don't use** command lines and steps instructions until if the step is unclear or misssing data 
-
-5. **Output strictly in JSON** (no extra text), in this format:
-
-{
-  "sql": "<full stored procedure code here>",
-  "datasourceName": ["<source1>", "<source2>", ...]
-}
+5. **STRICT OUTPUT RULES**:
+   - Use only table/column names present in the JSON.
+   - No hard-coded table names or procedures—derive from JSON.
+   - **No `\\n` or escaped newlines—return raw multiline SQL.**
+   - No comments unless JSON step is missing or unclear.
+   - Output strictly in JSON format:
+     {
+       "sql": "<full stored procedure here>"
+     }
 """
 }
 
@@ -93,10 +92,7 @@ def generate_sql():
 
         payload = {
             "model": "domo.openai.gpt-4o-mini",
-            "input": system_instruction["content"] + "\nDOMO's MAGIC ETL JSON :" + json.dumps(input_json),
-            "parameters": {
-                "temperature": 0.2
-            }
+            "input": system_instruction["content"] + "\nDOMO's MAGIC ETL JSON :" + json.dumps(input_json)
         }
 
         headers = {
@@ -120,14 +116,13 @@ def generate_sql():
         try:
             response_json = json.loads(response_content)
             sql = response_json.get("sql")
-            inputs = response_json.get("datasourceName", "[]")
 
             if not sql:
                 return jsonify({
                     "error": "DOMO API output is missing required fields",
                     "raw_output": response_content
                 }), 500
-            
+                
             statements = [s.strip() for s in sql.split(";") if s.strip()]
             combined_use = []
             other_statements = []
@@ -142,10 +137,9 @@ def generate_sql():
                 indexed_sql["0"] = " ".join(combined_use)
             for i, stmt in enumerate(other_statements, start=1):
                 indexed_sql[str(i)] = stmt
-
+            
             return jsonify({
-                "Output": indexed_sql,
-                # "inputs":inputs,
+                "Output": indexed_sql
             })
 
         except json.JSONDecodeError as e:
